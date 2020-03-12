@@ -887,16 +887,18 @@ class T5WithLMHeadModel(T5PreTrainedModel):
             encoder_hidden_states = encoder_outputs[0]
         else:
             encoder_outputs = ()
-
+        
         # Decode
         # Convert decoder inputs in embeddings if needed
         hidden_states = kwargs_decoder.pop("inputs_embeds", None)
         if hidden_states is None:
-            decoder_inputs_ids = kwargs_decoder.pop("input_ids")
+            decoder_inputs_ids = lm_labels
             hidden_states = self.shared(decoder_inputs_ids)
+            kwargs_decoder.pop("input_ids")
 
         kwargs_decoder["encoder_hidden_states"] = encoder_hidden_states
         kwargs_decoder["encoder_attention_mask"] = kwargs_encoder.get("attention_mask", None)
+        
         decoder_outputs = self.decoder(hidden_states, **kwargs_decoder)
 
         sequence_output = decoder_outputs[0]
@@ -904,7 +906,7 @@ class T5WithLMHeadModel(T5PreTrainedModel):
         # See https://github.com/tensorflow/mesh/blob/fa19d69eafc9a482aff0b59ddd96b025c0cb207d/mesh_tensorflow/transformer/transformer.py#L586
         sequence_output = sequence_output * (self.model_dim ** -0.5)
         lm_logits = self.lm_head(sequence_output)
-
+        
         decoder_outputs = (lm_logits,) + decoder_outputs[1:]  # Add hidden states and attention if they are here
         if lm_labels is not None:
             shift_logits = lm_logits[..., :-1, :].contiguous()
