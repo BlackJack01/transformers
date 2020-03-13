@@ -1,25 +1,3 @@
-# coding=utf-8
-# Copyright 2018 The Google AI Language Team Authors and The HuggingFace Inc. team.
-# Copyright (c) 2018, NVIDIA CORPORATION.  All rights reserved.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-"""
-Fine-tuning the library models for language modeling on a text file (GPT, GPT-2, BERT, RoBERTa).
-GPT and GPT-2 are fine-tuned using a causal language modeling (CLM) loss while BERT and RoBERTa are fine-tuned
-using a masked language modeling (MLM) loss.
-"""
-
-
 import argparse
 import glob
 import logging
@@ -60,6 +38,9 @@ from transformers import (
     RobertaConfig,
     RobertaForMaskedLM,
     RobertaTokenizer,
+    T5Config,
+    T5WithLMHeadModel,
+    T5Tokenizer,
     get_linear_schedule_with_warmup,
 )
 
@@ -80,6 +61,7 @@ MODEL_CLASSES = {
     "roberta": (RobertaConfig, RobertaForMaskedLM, RobertaTokenizer),
     "distilbert": (DistilBertConfig, DistilBertForMaskedLM, DistilBertTokenizer),
     "camembert": (CamembertConfig, CamembertForMaskedLM, CamembertTokenizer),
+    "t5": (T5Config, T5WithLMHeadModel, T5Tokenizer)
 }
 
 
@@ -145,11 +127,20 @@ class LineByLineTextDataset(Dataset):
 
 
 def load_and_cache_examples(args, tokenizer, evaluate=False):
-    file_path = args.eval_data_file if evaluate else args.train_data_file
-    if args.line_by_line:
-        return LineByLineTextDataset(tokenizer, args, file_path=file_path, block_size=args.block_size)
+    if args.seq2seq == 'false':
+        file_path = args.eval_data_file if evaluate else args.train_data_file
+        if args.line_by_line:
+            return (LineByLineTextDataset(tokenizer, args, file_path=file_path, block_size=args.block_size),)
+        else:
+            return TextDataset(tokenizer, args, file_path=file_path, block_size=args.block_size)
     else:
-        return TextDataset(tokenizer, args, file_path=file_path, block_size=args.block_size)
+        file_x_path = args.eval_data_x_file if evaluate else args.train_x_data_file
+        file_y_path = args.eval_data_y_file if evaluate else args.train_y_data_file
+
+        return (LineByLineTextDataset(tokenizer, args, file_path=file_x_path, block_size=args.block_size),
+        LineByLineTextDataset(tokenizer, args, file_path=file_y_path, block_size=args.block_size))
+
+    
 
 
 def set_seed(args):
@@ -232,6 +223,7 @@ def mask_tokens(inputs: torch.Tensor, tokenizer: PreTrainedTokenizer, args) -> T
 
 def train(args, train_dataset, model: PreTrainedModel, tokenizer: PreTrainedTokenizer) -> Tuple[int, float]:
     """ Train the model """
+    
     if args.local_rank in [-1, 0]:
         tb_writer = SummaryWriter()
 
@@ -242,10 +234,18 @@ def train(args, train_dataset, model: PreTrainedModel, tokenizer: PreTrainedToke
             return pad_sequence(examples, batch_first=True)
         return pad_sequence(examples, batch_first=True, padding_value=tokenizer.pad_token_id)
 
-    train_sampler = RandomSampler(train_dataset) if args.local_rank == -1 else DistributedSampler(train_dataset)
+    #train_sampler = RandomSampler(train_dataset[0]) if args.local_rank == -1 else DistributedSampler(train_dataset[0])
     train_dataloader = DataLoader(
-        train_dataset, sampler=train_sampler, batch_size=args.train_batch_size, collate_fn=collate
+        train_dataset[0], batch_size=args.train_batch_size, collate_fn=collate
     )
+
+
+    #### If seq2seq 
+    if len(train_dataset)>1:
+        #train_sampler_y = RandomSampler(train_dataset[1]) if args.local_rank == -1 else DistributedSampler(train_dataset[1])
+        train_dataloader_y = DataLoader(
+            train_dataset[1], batch_size=args.train_batch_size, collate_fn=collate
+        )
 
     if args.max_steps > 0:
         t_total = args.max_steps
@@ -296,7 +296,7 @@ def train(args, train_dataset, model: PreTrainedModel, tokenizer: PreTrainedToke
 
     # Train!
     logger.info("***** Running training *****")
-    logger.info("  Num examples = %d", len(train_dataset))
+    logger.info("  Num examples = %d", len(train_dataset[0]))
     logger.info("  Num Epochs = %d", args.num_train_epochs)
     logger.info("  Instantaneous batch size per GPU = %d", args.per_gpu_train_batch_size)
     logger.info(
@@ -336,10 +336,12 @@ def train(args, train_dataset, model: PreTrainedModel, tokenizer: PreTrainedToke
     train_iterator = trange(
         epochs_trained, int(args.num_train_epochs), desc="Epoch", disable=args.local_rank not in [-1, 0]
     )
-    set_seed(args)  # Added here for reproducibility
+      # Added here for reproducibility
+    set_seed(args)
     for _ in train_iterator:
         epoch_iterator = tqdm(train_dataloader, desc="Iteration", disable=args.local_rank not in [-1, 0])
-        for step, batch in enumerate(epoch_iterator):
+        epoch_iterator_y = tqdm(train_dataloader_y, desc="Iteration", disable=args.local_rank not in [-1, 0])
+        for step, (batch, batch_y) in enumerate(zip(epoch_iterator,epoch_iterator_y)):
 
             # Skip past any already trained steps if resuming training
             if steps_trained_in_current_epoch > 0:
@@ -347,10 +349,17 @@ def train(args, train_dataset, model: PreTrainedModel, tokenizer: PreTrainedToke
                 continue
 
             inputs, labels = mask_tokens(batch, tokenizer, args) if args.mlm else (batch, batch)
+            if args.seq2seq == 'true':
+                inputs, labels = batch, batch_y
+
             inputs = inputs.to(args.device)
             labels = labels.to(args.device)
             model.train()
-            outputs = model(inputs, masked_lm_labels=labels) if args.mlm else model(inputs, labels=labels)
+
+            if args.seq2seq == 'false':
+                outputs = model(inputs, masked_lm_labels=labels) if args.mlm else model(inputs, labels=labels)
+            else:
+                outputs = model(input_ids=inputs, decoder_lm_labels=labels)
             loss = outputs[0]  # model outputs are always tuple in transformers (see doc)
 
             if args.n_gpu > 1:
@@ -361,7 +370,7 @@ def train(args, train_dataset, model: PreTrainedModel, tokenizer: PreTrainedToke
             if args.fp16:
                 with amp.scale_loss(loss, optimizer) as scaled_loss:
                     scaled_loss.backward()
-            else:
+            else:   
                 loss.backward()
 
             tr_loss += loss.item()
@@ -485,8 +494,17 @@ def main():
 
     # Required parameters
     parser.add_argument(
-        "--train_data_file", default=None, type=str, required=True, help="The input training data file (a text file)."
+        "--train_data_file", default=None, type=str, help="The input training data file (a text file)."
     )
+
+    parser.add_argument(
+        "--train_x_data_file", default=None, type=str, help="The input training data x file (a text file) for seq2seq."
+    )
+
+    parser.add_argument(
+        "--train_y_data_file", default=None, type=str, help="The input training data y file (a text file) for seq2seq."
+    )
+
     parser.add_argument(
         "--output_dir",
         type=str,
@@ -495,6 +513,10 @@ def main():
     )
     parser.add_argument(
         "--model_type", type=str, required=True, help="The model architecture to be trained or fine-tuned.",
+    )
+
+    parser.add_argument(
+        "--seq2seq", type=str, default='false', help="true if model is seq2seq"
     )
 
     # Other parameters
