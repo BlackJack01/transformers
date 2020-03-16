@@ -918,3 +918,18 @@ class T5WithLMHeadModel(T5PreTrainedModel):
             ) + decoder_outputs  # TODO(thom): Add z_loss https://github.com/tensorflow/mesh/blob/fa19d69eafc9a482aff0b59ddd96b025c0cb207d/mesh_tensorflow/layers.py#L666
 
         return decoder_outputs + encoder_outputs
+    
+    @staticmethod
+    def prepare_inputs_for_generation(input_ids, past, decoder_input_ids, attention_mask):
+        if past is None:  # first step
+            encoder_outputs, decoder_cached_states = None, None
+        else:
+            encoder_outputs, decoder_cached_states = past
+        return {
+            "input_ids": input_ids,  # ignored after first pass
+            "decoder_cached_states": decoder_cached_states,
+            "decoder_lm_labels": decoder_input_ids,
+            "encoder_outputs": encoder_outputs,
+            "attention_mask": attention_mask,
+            # "decoder_attention_mask": decoder_attention_mask,
+        }
