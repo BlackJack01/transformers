@@ -865,6 +865,7 @@ class T5WithLMHeadModel(T5PreTrainedModel):
         # We let the specific kwargs override the common ones in case of conflict.
 
         lm_labels = kwargs.pop("decoder_lm_labels", None)
+        is_generation = kwargs.pop("is_generation", None)
 
         kwargs_common = dict(
             (k, v) for k, v in kwargs.items() if not k.startswith("encoder_") and not k.startswith("decoder_")
@@ -906,6 +907,9 @@ class T5WithLMHeadModel(T5PreTrainedModel):
         # See https://github.com/tensorflow/mesh/blob/fa19d69eafc9a482aff0b59ddd96b025c0cb207d/mesh_tensorflow/transformer/transformer.py#L586
         sequence_output = sequence_output * (self.model_dim ** -0.5)
         lm_logits = self.lm_head(sequence_output)
+        
+        if is_generation:
+            return (lm_logits,)
         
         decoder_outputs = (lm_logits,) + decoder_outputs[1:]  # Add hidden states and attention if they are here
         if lm_labels is not None:
