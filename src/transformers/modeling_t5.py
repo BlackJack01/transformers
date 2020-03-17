@@ -920,15 +920,15 @@ class T5WithLMHeadModel(T5PreTrainedModel):
         return decoder_outputs + encoder_outputs
     
     @staticmethod
-    def prepare_inputs_for_generation(input_ids, past, decoder_input_ids, attention_mask):
+    def prepare_inputs_for_generation(input_ids, past, encoder_inputs, attention_mask):
         if past is None:  # first step
             encoder_outputs, decoder_cached_states = None, None
         else:
             encoder_outputs, decoder_cached_states = past
         return {
-            "input_ids": input_ids,  # ignored after first pass
+            "input_ids": encoder_inputs,  # ignored after first pass
             #"decoder_cached_states": decoder_cached_states,
-            "decoder_lm_labels": decoder_input_ids,
+            "decoder_lm_labels": input_ids,
             #"encoder_outputs": encoder_outputs,
             #"attention_mask": attention_mask,
             "is_generation": True,
