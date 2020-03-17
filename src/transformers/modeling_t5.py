@@ -927,9 +927,10 @@ class T5WithLMHeadModel(T5PreTrainedModel):
             encoder_outputs, decoder_cached_states = past
         return {
             "input_ids": input_ids,  # ignored after first pass
-            "decoder_cached_states": decoder_cached_states,
+            #"decoder_cached_states": decoder_cached_states,
             "decoder_lm_labels": decoder_input_ids,
-            "encoder_outputs": encoder_outputs,
-            "attention_mask": attention_mask,
+            #"encoder_outputs": encoder_outputs,
+            #"attention_mask": attention_mask,
+            "is_generation": True,
             # "decoder_attention_mask": decoder_attention_mask,
         }
